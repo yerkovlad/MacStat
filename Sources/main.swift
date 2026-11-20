@@ -45,6 +45,7 @@ final class Thermal {
     private var copyEvent: CopyEvent?
     private var floatVal: FloatVal?
     private var sensors: [(svc: UnsafeMutableRawPointer, name: String)] = []
+    private var dieSensors: [(svc: UnsafeMutableRawPointer, name: String)]?
     private var client: UnsafeMutableRawPointer?
     private var services: CFArray?
 
@@ -73,6 +74,11 @@ final class Thermal {
         }
     }
 
+    func debugCounts() -> String {
+        _ = cpuTemp()
+        return "all=\(sensors.count) cpu=\(dieSensors?.count ?? 0) names=" + (dieSensors ?? []).prefix(6).map { $0.name }.joined(separator: ",")
+    }
+
     /// Все сенсоры, сгруппированные по имени (без индексов), макс. значение
     func allTemps() -> [(String, Double)] {
         guard let copyEvent, let floatVal else { return [] }
@@ -96,8 +102,14 @@ final class Thermal {
     /// Температура кристалла CPU (макс. по сенсорам), °C
     func cpuTemp() -> Double? {
         guard let copyEvent, let floatVal, !sensors.isEmpty else { return nil }
+        if dieSensors == nil {
+            let d = sensors.filter { $0.name.contains("tdie") || $0.name.contains("MTR Temp") }
+            let all = d.isEmpty ? sensors.filter { !$0.name.contains("gas gauge") && !$0.name.contains("NAND") } : d
+            // сенсоров кристалла десятки и они почти одинаковы — каждое чтение это IPC, берём каждый 4-й
+            dieSensors = all.count > 6 ? all.enumerated().filter { $0.offset % 4 == 0 }.map { $0.element } : all
+        }
         var die: [Double] = [], other: [Double] = []
-        for s in sensors {
+        for s in dieSensors! {
             guard let ev = copyEvent(s.svc, 15, 0, 0) else { continue }
             let v = floatVal(ev, 15 << 16)
             Unmanaged<AnyObject>.fromOpaque(ev).release()
@@ -149,6 +161,8 @@ final class Sampler {
     var temps: [(String, Double)] = []
     var batt: [(String, String)] = []
     var wantDetails = false
+    var procMode = 1          // 0 — не нужны (Details), 1 — раз в 2 тика (Overview), 2 — каждый тик (Processes)
+    var tickN = 0
     let chip = sysStr("machdep.cpu.brand_string")
     var prevProc: [Int32: UInt64] = [:]
     var prevProcT: UInt64 = 0
@@ -167,7 +181,8 @@ final class Sampler {
         gpu = sampleGPU()
         sampleBattery()
         sampleNet()
-        sampleProcs()
+        tickN += 1
+        if procMode == 2 || (procMode == 1 && tickN % 2 == 0) || (procMode == 1 && top.isEmpty) { sampleProcs() }
         var l = [0.0, 0.0, 0.0]; getloadavg(&l, 3); load1 = l[0]; load5 = l[1]; load15 = l[2]
         if wantDetails { temps = thermal.allTemps(); sampleBatteryDetails() }
         let now = Date.timeIntervalSinceReferenceDate
@@ -389,7 +404,7 @@ final class PanelView: NSView {
     var onChange: (() -> Void)?
     var tab: Int { seg.selectedSegment }
 
-    @objc func changed() { s.wantDetails = tab == 2; onChange?() }
+    @objc func changed() { s.wantDetails = tab == 2; s.procMode = [1, 2, 0][tab]; onChange?() }
 
     init(_ s: Sampler) {
         self.s = s
@@ -766,6 +781,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         schedule(2.0)
     }
 }
+
+#if BENCH
+_ = NSApplication.shared
+let bs = Sampler(); bs.wantDetails = true
+func cpuNs() -> UInt64 { clock_gettime_nsec_np(CLOCK_PROCESS_CPUTIME_ID) }
+func t(_ n: String, _ f: () -> Void) {
+    f(); let a = DispatchTime.now().uptimeNanoseconds, c = cpuNs()
+    for _ in 0..<20 { f() }
+    print(n, "wall", Double(DispatchTime.now().uptimeNanoseconds - a) / 20e6, "ms  cpu", Double(cpuNs() - c) / 20e6, "ms")
+}
+print("sensors:", bs.thermal.debugCounts())
+bs.sampleFull()
+t("cpu") { bs.sampleCPU() }
+t("thermal cpuTemp") { bs.temp = bs.thermal.cpuTemp() }
+t("allTemps") { bs.temps = bs.thermal.allTemps() }
+t("memory") { bs.sampleMemory() }
+t("gpu") { _ = bs.sampleGPU() }
+t("battery") { bs.sampleBattery() }
+t("batteryDetails") { bs.sampleBatteryDetails() }
+t("net") { bs.sampleNet() }
+usleep(500000)
+t("procs") { usleep(450000); bs.sampleProcs() }
+exit(0)
+#endif
 
 #if SNAPSHOT
 // Отладка: рендер вкладок панели в PNG (swiftc -D SNAPSHOT), без запуска приложения
