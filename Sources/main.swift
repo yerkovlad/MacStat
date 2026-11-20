@@ -161,7 +161,7 @@ final class Sampler {
     var temps: [(String, Double)] = []
     var batt: [(String, String)] = []
     var wantDetails = false
-    var procMode = 1          // 0 — не нужны (Details), 1 — раз в 2 тика (Overview), 2 — каждый тик (Processes)
+    var procMode = 1          // 0 — не нужны (Details), 1 — Overview (топ-3), 2 — Processes (полный список)
     var tickN = 0
     let chip = sysStr("machdep.cpu.brand_string")
     var prevProc: [Int32: UInt64] = [:]
@@ -182,9 +182,11 @@ final class Sampler {
         sampleBattery()
         sampleNet()
         tickN += 1
-        if procMode == 2 || (procMode == 1 && tickN % 2 == 0) || (procMode == 1 && top.isEmpty) { sampleProcs() }
+        // тяжёлые вещи — раз в 2 тика; пока нет первой пары замеров (нужна для дельт) — каждый тик
+        let needFirst = procMode == 2 ? procsCPU.isEmpty : top.isEmpty
+        if procMode != 0 && (tickN % 2 == 0 || needFirst) { sampleProcs() }
         var l = [0.0, 0.0, 0.0]; getloadavg(&l, 3); load1 = l[0]; load5 = l[1]; load15 = l[2]
-        if wantDetails { temps = thermal.allTemps(); sampleBatteryDetails() }
+        if wantDetails && (tickN % 2 == 0 || temps.isEmpty) { temps = thermal.allTemps(); sampleBatteryDetails() }
         let now = Date.timeIntervalSinceReferenceDate
         if now - lastDisk > 30 { lastDisk = now; sampleDisk() }
     }
@@ -398,6 +400,7 @@ final class PanelView: NSView {
     let W: CGFloat = 300, P: CGFloat = 16
     var CW: CGFloat { W - 2 * P }
     let quit = NSButton()
+    let dim = NSColor.labelColor.withAlphaComponent(0.5)   // читаемее tertiaryLabel на полупрозрачном фоне
     let seg = NSSegmentedControl(labels: ["Overview", "Processes", "Details"], trackingMode: .selectOne,
                                  target: nil, action: nil)
     let sortSeg = NSSegmentedControl(labels: ["CPU", "Memory"], trackingMode: .selectOne, target: nil, action: nil)
@@ -469,7 +472,7 @@ final class PanelView: NSView {
         text(value, x: P + 100, y: y, w: CW - 100, font: fValue, color: .secondaryLabelColor, right: true)
         y += 21
         if let f = frac { bar(y: y, frac: f, color: color ?? tint(f)); y += 9 }
-        if let c = caption { text(c, x: P, y: y, w: CW, font: fCap, color: .tertiaryLabelColor); y += 16 }
+        if let c = caption { text(c, x: P, y: y, w: CW, font: fCap, color: dim); y += 16 }
         y += 8
     }
 
@@ -486,7 +489,7 @@ final class PanelView: NSView {
         divider(y); y += 8
         let up = Int(ProcessInfo.processInfo.systemUptime)
         let ut = up >= 86400 ? "\(up / 86400)d \(up % 86400 / 3600)h" : "\(up / 3600)h \(up % 3600 / 60)m"
-        text("Uptime \(ut)", x: P, y: y + 2, w: 160, font: fCap, color: .tertiaryLabelColor)
+        text("Uptime \(ut)", x: P, y: y + 2, w: 160, font: fCap, color: dim)
         if !draw { quit.setFrameOrigin(NSPoint(x: W - P - quit.frame.width, y: y)) }
         y += 24
         return y
@@ -542,7 +545,7 @@ final class PanelView: NSView {
             y += ch + 6
         }
         text(String(format: "User %.0f%%   System %.0f%%   Load %.2f", s.cpuUser * 100, s.cpuSys * 100, s.load1),
-             x: P, y: y, w: CW, font: fCap, color: .tertiaryLabelColor)
+             x: P, y: y, w: CW, font: fCap, color: dim)
         y += 20
         divider(y); y += 12
 
@@ -572,7 +575,7 @@ final class PanelView: NSView {
         if !s.top.isEmpty {
             divider(y - 2); y += 10
             text("TOP PROCESSES", x: P, y: y, w: CW, font: NSFont.systemFont(ofSize: 10, weight: .semibold),
-                 color: .tertiaryLabelColor)
+                 color: dim)
             y += 18
             for (name, pct) in s.top {
                 text(name, x: P, y: y, w: CW - 70, font: NSFont.systemFont(ofSize: 12))
@@ -595,12 +598,12 @@ final class PanelView: NSView {
         let byMem = sortSeg.selectedSegment == 1
         let list = byMem ? s.procsMem : s.procsCPU
         let hf = NSFont.systemFont(ofSize: 10, weight: .semibold)
-        text("APP", x: P, y: y, w: 100, font: hf, color: .tertiaryLabelColor)
-        text("CPU", x: P + CW - 140, y: y, w: 60, font: hf, color: byMem ? .tertiaryLabelColor : .secondaryLabelColor, right: true)
-        text("MEMORY", x: P + CW - 70, y: y, w: 70, font: hf, color: byMem ? .secondaryLabelColor : .tertiaryLabelColor, right: true)
+        text("APP", x: P, y: y, w: 100, font: hf, color: dim)
+        text("CPU", x: P + CW - 140, y: y, w: 60, font: hf, color: byMem ? dim : .secondaryLabelColor, right: true)
+        text("MEMORY", x: P + CW - 70, y: y, w: 70, font: hf, color: byMem ? .secondaryLabelColor : dim, right: true)
         y += 18
         if list.isEmpty {
-            text("Collecting…", x: P, y: y, w: CW, font: NSFont.systemFont(ofSize: 12), color: .tertiaryLabelColor)
+            text("Collecting…", x: P, y: y, w: CW, font: NSFont.systemFont(ofSize: 12), color: dim)
             y += 24
             return
         }
@@ -609,9 +612,9 @@ final class PanelView: NSView {
         for p in list {
             text(p.count > 1 ? "\(p.name)  ×\(p.count)" : p.name, x: P, y: y, w: CW - 150, font: f)
             text(String(format: "%.1f%%", p.cpu * 100), x: P + CW - 140, y: y, w: 60, font: mf,
-                 color: byMem ? .tertiaryLabelColor : .secondaryLabelColor, right: true)
+                 color: byMem ? dim : .secondaryLabelColor, right: true)
             text(fmtBytes(Double(p.mem)), x: P + CW - 70, y: y, w: 70, font: mf,
-                 color: byMem ? .secondaryLabelColor : .tertiaryLabelColor, right: true)
+                 color: byMem ? .secondaryLabelColor : dim, right: true)
             y += 19
             let v = byMem ? Double(p.mem) : p.cpu
             bar(y: y, frac: v / mx, color: byMem ? .systemPurple : .controlAccentColor, h: 3)
@@ -623,7 +626,7 @@ final class PanelView: NSView {
     // MARK: Details
 
     func section(_ y: inout CGFloat, _ t: String) {
-        text(t, x: P, y: y, w: CW, font: NSFont.systemFont(ofSize: 10, weight: .semibold), color: .tertiaryLabelColor)
+        text(t, x: P, y: y, w: CW, font: NSFont.systemFont(ofSize: 10, weight: .semibold), color: dim)
         y += 18
     }
 
@@ -803,6 +806,16 @@ t("batteryDetails") { bs.sampleBatteryDetails() }
 t("net") { bs.sampleNet() }
 usleep(500000)
 t("procs") { usleep(450000); bs.sampleProcs() }
+let bp = PanelView(bs)
+for tabIdx in 0..<3 {
+    bp.seg.selectedSegment = tabIdx; bp.changed()
+    t("open tick tab\(tabIdx) sample") { bs.sampleFull() }
+    t("open tick tab\(tabIdx) layout") { _ = bp.relayout() }
+    t("open tick tab\(tabIdx) draw") {
+        let rep = bp.bitmapImageRepForCachingDisplay(in: bp.bounds)!
+        bp.cacheDisplay(in: bp.bounds, to: rep)
+    }
+}
 exit(0)
 #endif
 
