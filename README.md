@@ -25,7 +25,7 @@ Click it to see CPU, memory, temperature, GPU, battery, disk, network and the ap
   <img src="docs/screenshots/dark-details.png" width="270" alt="Details">
 </p>
 
-The menu bar shows CPU load and temperature (e.g. `8% 29°`). Right-click the item for Quit.
+The menu bar shows CPU load and temperature (e.g. `8% 29°`). Right-click the item for **Launch at Login** and Quit.
 
 ## Requirements
 
@@ -41,7 +41,8 @@ Temperature is read from Apple Silicon HID sensors (a private API), so Intel Mac
 open build/MacStat.app
 ```
 
-Drag `build/MacStat.app` to `/Applications` and add it to *System Settings → General → Login Items* to start at login.
+Drag `build/MacStat.app` to `/Applications`, then right-click the menu bar item and tick **Launch at Login**
+(or add it manually in *System Settings → General → Login Items & Extensions*).
 The app is ad-hoc signed; if Gatekeeper complains, right-click → Open.
 
 ## Project layout

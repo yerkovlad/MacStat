@@ -4,6 +4,7 @@ import AppKit
 import IOKit
 import IOKit.ps
 import Darwin
+import ServiceManagement
 
 // MARK: - Helpers
 
@@ -762,6 +763,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     @objc func clicked(_ sender: NSStatusBarButton) {
         if NSApp.currentEvent?.type == .rightMouseUp {
             let m = NSMenu()
+            let login = m.addItem(withTitle: "Launch at Login", action: #selector(toggleLogin), keyEquivalent: "")
+            login.target = self
+            login.state = SMAppService.mainApp.status == .enabled ? .on : .off
+            m.addItem(.separator())
             m.addItem(withTitle: "Quit MacStat", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
             item.menu = m; sender.performClick(nil); item.menu = nil
             return
@@ -776,6 +781,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // второй замер через секунду даёт сеть и топ процессов
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
             if self?.popover.isShown == true { self?.tick() }
+        }
+    }
+
+    @objc func toggleLogin() {
+        let svc = SMAppService.mainApp
+        do {
+            if svc.status == .enabled { try svc.unregister() } else { try svc.register() }
+        } catch {
+            let a = NSAlert()
+            a.messageText = "Couldn't change Launch at Login"
+            a.informativeText = "\(error.localizedDescription)\n\nTry moving MacStat.app to /Applications first."
+            a.runModal()
         }
     }
 
